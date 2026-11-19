@@ -24,9 +24,9 @@ As versões abaixo são as configuradas no repositório:
 | ASP.NET Core | SDK Web do .NET 10 |
 | Entity Framework Core SQL Server | `10.0.15` |
 | Entity Framework Core Tools | `10.0.15` |
-| SQL Server | 2022 ou superior; Docker usa `2022-latest` |
-| Docker Compose | Compose Specification |
-| Front-end | Bootstrap e jQuery incluídos em `wwwroot/lib` |
+| SQL Server | 2022 ou superior |
+| Docker | `v4.99.0` |
+| Front-end | Bootstrap `v5.3.3` e jQuery `3.7.1` |
 
 ## Requisitos
 
