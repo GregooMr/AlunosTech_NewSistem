@@ -1,0 +1,117 @@
+@model SalaDeAulaViewModel
+@{
+    var matricula = Model.Matricula;
+    ViewData["Title"] = matricula.Curso.Titulo;
+
+    static (string Classe, string Icone) Estilo(string tipo) => tipo switch
+    {
+        "Plano" => ("tile-grey", "bi-file-earmark-text"),
+        "Livro" => ("tile-cyan", "bi-book"),
+        "Slide" => ("tile-cream", "bi-easel"),
+        "Videoaula" => ("tile-blue", "bi-play-btn"),
+        _ => ("tile-grey", "bi-file-earmark")
+    };
+
+    var planos = Model.Atividades.Where(a => a.Conteudo.TipoMaterial == "Plano").ToList();
+    var unidade = Model.Atividades.Where(a => a.Conteudo.TipoMaterial != "Plano").ToList();
+
+    var grupos = new[]
+    {
+        (Titulo: "PLANO DE ENSINO", Icone: "bi-journal-text", Itens: planos),
+        (Titulo: "UNIDADE I — CONTEÚDO PROGRAMÁTICO", Icone: "bi-book-half", Itens: unidade)
+    };
+}
+
+<div class="ava-topbar text-white rounded-3 py-3 px-4 mb-4 shadow-sm d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+        <a asp-action="Index" class="text-info text-decoration-none small fw-bold"><i class="bi bi-arrow-left me-1"></i>Voltar para Meus Cursos</a>
+        <h4 class="fw-bold mb-0 mt-1">@matricula.Curso.Codigo: @matricula.Curso.Titulo</h4>
+    </div>
+    <span class="badge bg-warning text-dark fs-6 px-3 py-2">Progresso: @matricula.ProgressoPercentual%</span>
+</div>
+
+<div class="progress mb-4" style="height: 10px;" role="progressbar" aria-valuenow="@matricula.ProgressoPercentual" aria-valuemin="0" aria-valuemax="100">
+    <div class="progress-bar @(matricula.ProgressoPercentual >= 100 ? "bg-success" : "bg-primary")" style="width: @(matricula.ProgressoPercentual)%"></div>
+</div>
+
+@if (matricula.ProgressoPercentual >= 100 && matricula.Status == "Ativa")
+{
+    <div class="alert alert-success border-2 shadow-sm p-4 mb-4 text-center rounded-4">
+        <h4 class="fw-bold text-success mb-2"><i class="bi bi-award-fill me-2"></i>Parabéns! Conteúdo concluído 100%</h4>
+        <p class="mb-3 text-secondary">Você concluiu todos os materiais desta disciplina. A Avaliação Final (Prova) está liberada.</p>
+        <a asp-action="Prova" asp-route-id="@matricula.Id" class="btn btn-success btn-lg fw-bold px-5 rounded-pill shadow">
+            <i class="bi bi-file-earmark-check-fill me-2"></i>Realizar Prova Final
+        </a>
+    </div>
+}
+
+@if (!Model.Atividades.Any())
+{
+    <div class="alert alert-info">O professor ainda não publicou conteúdos para esta disciplina.</div>
+}
+
+@foreach (var grupo in grupos)
+{
+    if (grupo.Itens.Count == 0) { continue; }
+    <div class="mb-5">
+        <h5 class="text-primary fw-bold border-bottom pb-2 mb-3"><i class="bi @grupo.Icone me-2"></i>@grupo.Titulo</h5>
+        <div class="row g-3">
+            @foreach (var atividade in grupo.Itens)
+            {
+                var (classe, icone) = Estilo(atividade.Conteudo.TipoMaterial);
+                <div class="col-md-6">
+                    @if (atividade.Concluida)
+                    {
+                        <button type="button" class="tile-ava tile-done shadow-sm" disabled>
+                            <i class="bi bi-check-circle-fill display-5 d-block mb-2"></i>
+                            <span class="fw-bold text-uppercase small">@atividade.Conteudo.Titulo — concluído</span>
+                        </button>
+                    }
+                    else if (atividade.Proxima)
+                    {
+                        <form asp-action="ConcluirAtividade" method="post">
+                            <input type="hidden" name="matriculaId" value="@matricula.Id" />
+                            <input type="hidden" name="conteudoId" value="@atividade.Conteudo.Id" />
+                            <button type="submit" class="tile-ava @classe shadow-sm">
+                                <i class="bi @icone display-5 d-block mb-2"></i>
+                                <span class="fw-bold text-uppercase small">@atividade.Conteudo.Titulo (+@atividade.Ganho%)</span>
+                            </button>
+                        </form>
+                    }
+                    else
+                    {
+                        <button type="button" class="tile-ava @classe shadow-sm" disabled>
+                            <i class="bi bi-lock-fill display-5 d-block mb-2"></i>
+                            <span class="fw-bold text-uppercase small">@atividade.Conteudo.Titulo (+@atividade.Ganho%)</span>
+                        </button>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(atividade.Conteudo.Descricao) || !string.IsNullOrWhiteSpace(atividade.Conteudo.ComentarioProfessor) || !string.IsNullOrWhiteSpace(atividade.Conteudo.UrlArquivo))
+                    {
+                        <div class="small text-secondary mt-2 px-2">
+                            @if (!string.IsNullOrWhiteSpace(atividade.Conteudo.Descricao))
+                            {
+                                <div>@atividade.Conteudo.Descricao</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(atividade.Conteudo.ComentarioProfessor))
+                            {
+                                <div class="alert alert-light border-start border-primary border-3 mt-2 mb-1 py-2 px-3">
+                                    <strong><i class="bi bi-chat-left-text me-1"></i>Comentário do professor:</strong><br />
+                                    @atividade.Conteudo.ComentarioProfessor
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(atividade.Conteudo.UrlArquivo))
+                            {
+                                <a href="@atividade.Conteudo.UrlArquivo" target="_blank" rel="noopener" class="d-inline-block mt-1"><i class="bi bi-file-earmark-pdf me-1"></i>Visualizar PDF: @atividade.Conteudo.NomeArquivo</a>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<div class="card border-0 shadow-sm p-3 d-flex flex-row justify-content-between align-items-center flex-wrap gap-2">
+    <span class="text-muted"><i class="bi bi-chat-dots me-2"></i>Ficou com alguma dúvida sobre esta disciplina?</span>
+    <a asp-controller="Forum" asp-action="Index" asp-route-cursoId="@matricula.CursoId" class="btn btn-outline-primary btn-sm">Enviar dúvida ao professor</a>
+</div>

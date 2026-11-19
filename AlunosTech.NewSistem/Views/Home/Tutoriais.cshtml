@@ -1,0 +1,39 @@
+@{
+    ViewData["Title"] = "Tutoriais";
+    var tutoriais = new[]
+    {
+        (Titulo: "Como se matricular em uma disciplina", Passos: new[] { "Acesse Conteúdos Acadêmicos.", "No final da página, escolha a disciplina em \"Matricular em Nova Disciplina\".", "Clique em Efetuar Matrícula. Você não pode se matricular duas vezes na mesma disciplina." }),
+        (Titulo: "Como acompanhar seu progresso", Passos: new[] { "Abra a disciplina em Acessar Disciplina.", "Conclua os conteúdos na ordem: plano de ensino, livro-texto, slides e videoaulas.", "A barra de progresso é atualizada a cada conteúdo concluído, até 100%." }),
+        (Titulo: "Como trancar ou desmatricular", Passos: new[] { "Em Meus Cursos, use Trancar para pausar a disciplina (você pode reativar depois).", "Use Desmatricular para cancelar de vez; a ação é registrada em auditoria." }),
+        (Titulo: "Como fazer a prova e emitir o certificado", Passos: new[] { "Conclua 100% dos conteúdos para liberar a Prova Final.", "Responda às questões; a nota é calculada automaticamente.", "Com nota igual ou superior a 7,0, o certificado é emitido com código, nome, disciplina, nota e data." }),
+        (Titulo: "Como enviar dúvidas ao professor", Passos: new[] { "Abra Dúvidas no menu superior.", "Escolha a disciplina, escreva a pergunta e envie.", "A resposta do professor aparece na mesma tela." }),
+        (Titulo: "Dica técnica: boas práticas com .NET e SQL", Passos: new[] { "Mantenha regras de negócio em serviços, não em controllers.", "Nunca guarde senhas em texto puro: use hash com salt.", "Crie índices para as colunas mais consultadas e evite SELECT * em consultas críticas." }),
+    };
+}
+
+<h2 class="text-primary fw-bold"><i class="bi bi-question-circle me-2"></i>Manuais e Tutoriais</h2>
+<p class="text-muted">Guias rápidos de utilização do ambiente virtual e orientações de desenvolvimento .NET e SQL.</p>
+
+<div class="accordion shadow-sm" id="tutoriais">
+    @for (var i = 0; i < tutoriais.Length; i++)
+    {
+        var tutorial = tutoriais[i];
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button @(i == 0 ? "" : "collapsed")" type="button" data-bs-toggle="collapse" data-bs-target="#tut@(i)" aria-expanded="@(i == 0 ? "true" : "false")">
+                    @tutorial.Titulo
+                </button>
+            </h2>
+            <div id="tut@(i)" class="accordion-collapse collapse @(i == 0 ? "show" : "")" data-bs-parent="#tutoriais">
+                <div class="accordion-body">
+                    <ol class="mb-0">
+                        @foreach (var passo in tutorial.Passos)
+                        {
+                            <li>@passo</li>
+                        }
+                    </ol>
+                </div>
+            </div>
+        </div>
+    }
+</div>

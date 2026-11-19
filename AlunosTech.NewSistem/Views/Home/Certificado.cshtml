@@ -1,0 +1,18 @@
+@model CertificateViewModel
+@{
+    ViewData["Title"] = "Certificado";
+}
+<div class="certificate card border-0 shadow mx-auto p-5 text-center">
+    <span class="display-5 text-warning">★</span>
+    <h1 class="text-primary mt-3">Certificado de Conclusão</h1>
+    <p class="lead">A Alunos Tech certifica que</p>
+    <h2>@Model.Matricula.Aluno.Nome</h2>
+    <p>concluiu a disciplina <strong>@Model.Matricula.Curso.Titulo</strong> (@Model.Matricula.Curso.Codigo) com nota <strong>@Model.Certificate.Nota.ToString("0.00")</strong>.</p>
+    <p class="text-muted">Emitido em @Model.Certificate.DataEmissao.ToLocalTime().ToString("dd/MM/yyyy")</p>
+    <div class="badge text-bg-light border p-3">Código: @Model.Certificate.Codigo</div>
+    <div class="mt-4 d-flex justify-content-center gap-2">
+        <a asp-action="Index" class="btn btn-primary">Voltar ao ambiente</a>
+        <button type="button" class="btn btn-outline-secondary" onclick="window.print()">Imprimir</button>
+    </div>
+    <small class="text-muted mt-4">Certificado simulado para fins de demonstração acadêmica.</small>
+</div>

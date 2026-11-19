@@ -1,0 +1,125 @@
+@model IReadOnlyList<Curso>
+@{
+    ViewData["Title"] = "Área do professor";
+    var duvidas = (ViewBag.Duvidas as IEnumerable<DuvidaForum>) ?? Enumerable.Empty<DuvidaForum>();
+    var tipos = (ViewBag.Tipos as IEnumerable<string>) ?? Enumerable.Empty<string>();
+}
+
+<div class="professor-page">
+<div class="mb-4"><span class="eyebrow">GESTÃO ACADÊMICA</span><h1 class="h2">Área do professor</h1></div>
+
+@if (Model.Count == 0)
+{
+    <div class="alert alert-info">Você ainda não é responsável por nenhuma disciplina.</div>
+}
+
+<div class="accordion" id="disciplinasAccordion">
+@foreach (var curso in Model)
+{
+    var headingId = $"headingDisciplina{curso.Id}";
+    var collapseId = $"collapseDisciplina{curso.Id}";
+    <div class="accordion-item border-0 shadow-sm mb-3">
+        <h2 class="accordion-header" id="@headingId">
+            <button class="accordion-button collapsed fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#@collapseId" aria-expanded="false" aria-controls="@collapseId">
+                <span class="text-primary">@curso.Codigo</span><span class="mx-2">·</span>@curso.Titulo
+            </button>
+        </h2>
+        <div id="@collapseId" class="accordion-collapse collapse" aria-labelledby="@headingId" data-bs-parent="#disciplinasAccordion">
+            <div class="accordion-body">
+            <h5>Conteúdos</h5>
+            <p class="small text-muted">O progresso do aluno é calculado proporcionalmente aos pesos abaixo.</p>
+
+            @if (curso.Conteudos.Count == 0)
+            {
+                <p class="text-muted">Nenhum conteúdo publicado.</p>
+            }
+            <ul class="list-group mb-3">
+                @foreach (var item in curso.Conteudos.OrderBy(c => c.Id))
+                {
+                    <li class="list-group-item">
+                        <form asp-action="EditarConteudo" method="post" class="row g-2 align-items-center">
+                            <input type="hidden" name="id" value="@item.Id" />
+                            <div class="col-md-5"><input name="titulo" class="form-control form-control-sm" value="@item.Titulo" maxlength="255" required /></div>
+                            <div class="col-md-3">
+                                <select name="tipoMaterial" class="form-select form-select-sm">
+                                    @foreach (var tipo in tipos)
+                                    {
+                                        <option value="@tipo" selected="@(tipo == item.TipoMaterial)">@tipo</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-2"><input name="pesoPercentual" type="number" min="0" max="100" class="form-control form-control-sm" value="@item.PesoPercentual" required /></div>
+                            <div class="col-md-2 d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-primary flex-fill">Salvar</button>
+                                <button class="btn btn-sm btn-outline-danger flex-fill" type="submit" formaction="@Url.Action("ExcluirConteudo")" formnovalidate onclick="return confirm('Excluir este conteúdo?');">Excluir</button>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small text-muted mb-1">Comentário do professor</label>
+                                <textarea name="comentarioProfessor" class="form-control form-control-sm" rows="2" maxlength="2000" placeholder="Orientação, observação ou explicação adicional para o aluno">@item.ComentarioProfessor</textarea>
+                            </div>
+                        </form>
+                            <div class="small text-muted mt-2">@(item.Descricao ?? "Sem descrição didática")</div>
+                            @if (!string.IsNullOrWhiteSpace(item.NomeArquivo))
+                            {
+                                <div class="small text-success mt-1"><i class="bi bi-file-earmark-pdf me-1"></i>@item.NomeArquivo</div>
+                            }
+                            <form asp-action="AnexarPdf" method="post" enctype="multipart/form-data" class="row g-2 mt-1 align-items-center">
+                                <input type="hidden" name="id" value="@item.Id" />
+                                <div class="col-md-8"><input name="arquivo" type="file" accept="application/pdf,.pdf" class="form-control form-control-sm" /></div>
+                                <div class="col-md-4"><button class="btn btn-sm btn-outline-secondary w-100">Anexar PDF</button></div>
+                            </form>
+                    </li>
+                }
+            </ul>
+
+            <form asp-action="AdicionarConteudo" method="post" class="row g-2">
+                <input type="hidden" name="cursoId" value="@curso.Id" />
+                <div class="col-md-5"><input name="titulo" class="form-control" placeholder="Título do conteúdo" maxlength="255" required /></div>
+                <div class="col-md-3">
+                    <select name="tipoMaterial" class="form-select" required>
+                        @foreach (var tipo in tipos)
+                        {
+                            <option value="@tipo">@tipo</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2"><input name="pesoPercentual" type="number" min="0" max="100" class="form-control" placeholder="Peso %" required /></div>
+                <div class="col-md-2"><button class="btn btn-primary w-100">Adicionar</button></div>
+            </form>
+            </div>
+        </div>
+    </div>
+}
+</div>
+
+<h2 class="h4 mb-3">Dúvidas dos alunos</h2>
+@if (!duvidas.Any())
+{
+    <p class="text-muted">Nenhuma dúvida recebida.</p>
+}
+@foreach (var duvida in duvidas)
+{
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <div class="d-flex justify-content-between">
+                <strong>@duvida.Curso.Titulo</strong>
+                <small class="text-muted">@duvida.Aluno.Nome · @duvida.DataPergunta.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</small>
+            </div>
+            <p class="mt-2">@duvida.Pergunta</p>
+            @if (string.IsNullOrWhiteSpace(duvida.RespostaProfessor))
+            {
+                <span class="badge text-bg-warning mb-2">Pendente</span>
+            }
+            else
+            {
+                <span class="badge text-bg-success mb-2">Respondida</span>
+            }
+            <form asp-action="Responder" method="post" class="input-group">
+                <input type="hidden" name="id" value="@duvida.Id" />
+                <input name="resposta" class="form-control" value="@duvida.RespostaProfessor" placeholder="Resposta ao aluno" required />
+                <button class="btn btn-outline-primary">Responder</button>
+            </form>
+        </div>
+    </div>
+}
+</div>
