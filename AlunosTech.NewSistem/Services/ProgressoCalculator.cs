@@ -7,9 +7,9 @@ namespace AlunosTech.NewSistem.Services;
 /// sequenciais cujo peso soma 100%. O progresso do aluno só avança por etapa concluída
 /// no servidor, o que impede "turbinar" o progresso repetindo cliques ou adulterando o formulário.
 /// </summary>
-public static class ProgressoCalculator
+public sealed class ProgressoCalculator : IProgressoCalculator
 {
-    public static IReadOnlyList<AtividadeViewModel> Montar(IEnumerable<ConteudoDisciplina> conteudos, int progresso)
+    public IReadOnlyList<AtividadeViewModel> Montar(IEnumerable<ConteudoDisciplina> conteudos, int progresso)
     {
         var lista = conteudos.OrderBy(c => c.Id).ToList();
         var resultado = new List<AtividadeViewModel>(lista.Count);

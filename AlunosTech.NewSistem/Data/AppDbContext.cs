@@ -28,7 +28,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ConteudoDisciplina>().Property(c => c.UrlArquivo).IsUnicode(false);
         // O trigger de auditoria existe no script SQL. Declará-lo faz o EF usar "OUTPUT INTO" nos INSERTs
         // (sem isso, inserir em Matriculas falha com o erro 334 do SQL Server quando o trigger existe).
-        modelBuilder.Entity<Matricula>().ToTable("Matriculas", "dbo", t => t.HasTrigger("trg_AuditoriaMatriculaStatus"));
+        modelBuilder.Entity<Matricula>().ToTable("Matriculas", "dbo", t =>
+        {
+            t.HasTrigger("trg_AuditoriaMatriculaStatus");
+            t.HasTrigger("trg_AuditoriaNotaFinal");
+        });
         // Impede matrícula duplicada do mesmo aluno na mesma disciplina (mesma regra do script SQL).
         modelBuilder.Entity<Matricula>().HasIndex(m => new { m.AlunoId, m.CursoId }).IsUnique().HasFilter("[Status] <> 'Cancelada'");
         modelBuilder.Entity<Matricula>().HasOne(m => m.Aluno).WithMany().HasForeignKey(m => m.AlunoId).OnDelete(DeleteBehavior.NoAction);

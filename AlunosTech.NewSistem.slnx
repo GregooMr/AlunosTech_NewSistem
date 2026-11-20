@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="AlunosTech.NewSistem/AlunosTech.NewSistem.csproj" />
+  <Project Path="AlunosTech.NewSistem.Tests/AlunosTech.NewSistem.Tests.csproj" />
 </Solution>

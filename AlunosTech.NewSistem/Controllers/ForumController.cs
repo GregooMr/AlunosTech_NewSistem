@@ -1,29 +1,23 @@
-using AlunosTech.NewSistem.Data;
+using System.Security.Claims;
 using AlunosTech.NewSistem.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace AlunosTech.NewSistem.Controllers;
 
-public class ForumController(AppDbContext context, IForumService forum) : Controller
+[Authorize(Roles = "Aluno")]
+public class ForumController(ICursoService cursos, IForumService forum) : Controller
 {
     private const int LimitePergunta = 2000;
 
-    private int? AlunoId => HttpContext.Session.GetInt32("AlunoId");
-    private bool EhProfessor => HttpContext.Session.GetString("Perfil") == "Professor";
+    private int AlunoId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     public async Task<IActionResult> Index(int? cursoId)
     {
-        if (AlunoId is not { } alunoId) return RedirectToAction("Login", "Home");
-        // Professores respondem dúvidas na própria área.
-        if (EhProfessor) return RedirectToAction("Index", "Professor");
+        var alunoId = AlunoId;
 
         // O aluno só vê as próprias dúvidas e só pode perguntar nas disciplinas em que está matriculado.
-        ViewBag.Cursos = await context.Matriculas.AsNoTracking()
-            .Where(m => m.AlunoId == alunoId)
-            .Select(m => m.Curso)
-            .OrderBy(c => c.Titulo)
-            .ToListAsync();
+        ViewBag.Cursos = await cursos.ListarMatriculadosAsync(alunoId);
         ViewBag.CursoSelecionado = cursoId;
         return View(await forum.ListAsync(cursoId, alunoId: alunoId));
     }
@@ -31,8 +25,7 @@ public class ForumController(AppDbContext context, IForumService forum) : Contro
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> Perguntar(int cursoId, string? pergunta)
     {
-        if (AlunoId is not { } alunoId) return RedirectToAction("Login", "Home");
-        if (EhProfessor) return RedirectToAction("Index", "Professor");
+        var alunoId = AlunoId;
 
         if (string.IsNullOrWhiteSpace(pergunta))
         {

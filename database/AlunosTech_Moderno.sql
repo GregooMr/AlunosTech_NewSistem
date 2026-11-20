@@ -6,6 +6,23 @@ IF DB_ID(N'AlunosTech_Moderno') IS NULL
 	CREATE DATABASE AlunosTech_Moderno;
 GO
 
+-- Execute em modo SQLCMD e informe APP_DB_PASSWORD como variável de ambiente.
+USE master;
+GO
+DECLARE @senhaApp nvarchar(128) = N'$(APP_DB_PASSWORD)';
+DECLARE @sqlLogin nvarchar(max);
+IF LEN(@senhaApp) < 8
+	THROW 50010, 'Defina APP_DB_PASSWORD ao executar este script em modo SQLCMD.', 1;
+SET @sqlLogin = N'CREATE LOGIN [app_user] WITH PASSWORD = N''' + REPLACE(@senhaApp, N'''', N'''''') + N''', CHECK_POLICY = ON;';
+IF SUSER_ID(N'app_user') IS NULL
+	EXEC(@sqlLogin);
+ELSE
+BEGIN
+	SET @sqlLogin = N'ALTER LOGIN [app_user] WITH PASSWORD = N''' + REPLACE(@senhaApp, N'''', N'''''') + N''', CHECK_POLICY = ON;';
+	EXEC(@sqlLogin);
+END;
+GO
+
 USE AlunosTech_Moderno;
 GO
 
@@ -112,6 +129,9 @@ END;
 GO
 
 -- Compatibilidade com bases antigas que ainda não possuem os campos de material.
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
 IF COL_LENGTH(N'dbo.ConteudosDisciplina', N'Descricao') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD Descricao NVARCHAR(MAX) NULL;
 IF COL_LENGTH(N'dbo.ConteudosDisciplina', N'ComentarioProfessor') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD ComentarioProfessor NVARCHAR(2000) NULL;
 IF COL_LENGTH(N'dbo.ConteudosDisciplina', N'NomeArquivo') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD NomeArquivo VARCHAR(255) NULL;
@@ -148,12 +168,24 @@ IF NOT EXISTS
 	ALTER TABLE dbo.Matriculas ADD CONSTRAINT CK_Matriculas_Status CHECK (Status IN ('Ativa', 'Trancada', 'Cancelada', 'Concluida'));
 GO
 
+SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET ARITHABORT ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET QUOTED_IDENTIFIER ON;
+SET NUMERIC_ROUNDABORT OFF;
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Matriculas') AND name = N'IX_Matriculas_AlunoCurso')
 	CREATE UNIQUE NONCLUSTERED INDEX IX_Matriculas_AlunoCurso ON dbo.Matriculas(AlunoId, CursoId) WHERE Status <> 'Cancelada';
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.DuvidasForum') AND name = N'IX_DuvidasForum_CursoId')
 	CREATE NONCLUSTERED INDEX IX_DuvidasForum_CursoId ON dbo.DuvidasForum(CursoId, AlunoId);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ConteudosDisciplina') AND name = N'IX_ConteudosDisciplina_CursoId')
 	CREATE NONCLUSTERED INDEX IX_ConteudosDisciplina_CursoId ON dbo.ConteudosDisciplina(CursoId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Matriculas') AND name = N'IX_Matriculas_AlunoId')
+	CREATE NONCLUSTERED INDEX IX_Matriculas_AlunoId ON dbo.Matriculas(AlunoId) INCLUDE (CursoId, Status, ProgressoPercentual);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.LogsAuditoria') AND name = N'IX_LogsAuditoria_Acao_DataLog')
+	CREATE NONCLUSTERED INDEX IX_LogsAuditoria_Acao_DataLog ON dbo.LogsAuditoria(Acao, DataLog);
 GO
 
 CREATE OR ALTER FUNCTION dbo.fn_VerificarAprovacao (@Nota DECIMAL(5,2))
@@ -197,6 +229,40 @@ BEGIN
 END;
 GO
 
+IF TYPE_ID(N'dbo.MatriculaEmLote') IS NULL
+	EXEC(N'CREATE TYPE dbo.MatriculaEmLote AS TABLE (AlunoId INT NOT NULL, CursoId INT NOT NULL, PRIMARY KEY (AlunoId, CursoId));');
+GO
+
+CREATE OR ALTER PROCEDURE dbo.sp_MatricularAlunosEmLote
+	@Matriculas dbo.MatriculaEmLote READONLY,
+	@Criadas INT OUTPUT
+AS
+BEGIN
+	SET NOCOUNT ON;
+	SET XACT_ABORT ON;
+	SET @Criadas = 0;
+
+	BEGIN TRY
+		BEGIN TRANSACTION;
+		INSERT INTO dbo.Matriculas (AlunoId, CursoId)
+		SELECT lote.AlunoId, lote.CursoId
+		FROM @Matriculas lote
+		WHERE NOT EXISTS
+		(
+			SELECT 1 FROM dbo.Matriculas m WITH (UPDLOCK, HOLDLOCK)
+			WHERE m.AlunoId = lote.AlunoId AND m.CursoId = lote.CursoId AND m.Status <> 'Cancelada'
+		);
+		SET @Criadas = @@ROWCOUNT;
+		COMMIT TRANSACTION;
+		SELECT @Criadas AS MatriculasCriadas;
+	END TRY
+	BEGIN CATCH
+		IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+		THROW;
+	END CATCH;
+END;
+GO
+
 CREATE OR ALTER TRIGGER dbo.trg_AuditoriaMatriculaStatus
 ON dbo.Matriculas
 AFTER UPDATE
@@ -209,6 +275,21 @@ BEGIN
 			   CONCAT('Matrícula ID: ', i.Id, ' alterada de ', d.Status, ' para o status: ', i.Status)
 		FROM inserted i INNER JOIN deleted d ON d.Id = i.Id
 		WHERE ISNULL(i.Status, '') <> ISNULL(d.Status, '');
+END;
+GO
+
+CREATE OR ALTER TRIGGER dbo.trg_AuditoriaNotaFinal
+ON dbo.Matriculas
+AFTER UPDATE
+AS
+BEGIN
+	SET NOCOUNT ON;
+	IF UPDATE(NotaFinal)
+		INSERT INTO dbo.LogsAuditoria (TabelaAfetada, Acao, Detalhes)
+		SELECT 'Matriculas', 'ALTERACAO_NOTA_FINAL',
+			CONCAT('Matrícula ID: ', i.Id, '; NotaFinal antiga: ', COALESCE(CONVERT(varchar(20), d.NotaFinal), 'NULL'), '; NotaFinal nova: ', COALESCE(CONVERT(varchar(20), i.NotaFinal), 'NULL'))
+		FROM inserted i INNER JOIN deleted d ON d.Id = i.Id
+		WHERE i.NotaFinal <> d.NotaFinal OR (i.NotaFinal IS NULL AND d.NotaFinal IS NOT NULL) OR (i.NotaFinal IS NOT NULL AND d.NotaFinal IS NULL);
 END;
 GO
 
@@ -261,5 +342,30 @@ SELECT u.Id, c.Id, v.Progresso
 FROM (VALUES ('8125-60', 100), ('8130-60', 25)) v(Codigo, Progresso)
 INNER JOIN dbo.Usuarios u ON u.Email = 'carlos@alunostech.com'
 INNER JOIN dbo.Cursos c ON c.Codigo = v.Codigo
-WHERE NOT EXISTS (SELECT 1 FROM dbo.Matriculas m WHERE m.AlunoId = u.Id AND m.CursoId = c.Id);
+WHERE NOT EXISTS (SELECT 1 FROM dbo.Matriculas m WHERE m.AlunoId = u.Id AND m.CursoId = c.Id AND m.Status <> 'Cancelada');
+GO
+
+IF DATABASE_PRINCIPAL_ID(N'app_user') IS NULL
+	CREATE USER [app_user] FOR LOGIN [app_user];
+IF NOT EXISTS (SELECT 1 FROM sys.database_role_members WHERE role_principal_id = DATABASE_PRINCIPAL_ID(N'db_datareader') AND member_principal_id = DATABASE_PRINCIPAL_ID(N'app_user'))
+	ALTER ROLE [db_datareader] ADD MEMBER [app_user];
+IF NOT EXISTS (SELECT 1 FROM sys.database_role_members WHERE role_principal_id = DATABASE_PRINCIPAL_ID(N'db_datawriter') AND member_principal_id = DATABASE_PRINCIPAL_ID(N'app_user'))
+	ALTER ROLE [db_datawriter] ADD MEMBER [app_user];
+GRANT EXECUTE ON OBJECT::dbo.sp_ConcluirProvaEEmitirCertificado TO [app_user];
+GRANT EXECUTE ON OBJECT::dbo.sp_MatricularAlunosEmLote TO [app_user];
+GRANT EXECUTE ON OBJECT::dbo.fn_VerificarAprovacao TO [app_user];
+GRANT EXECUTE, REFERENCES ON TYPE::dbo.MatriculaEmLote TO [app_user];
+GO
+
+/*
+Verificação manual de desempenho no SSMS (exige permissão para alterar/reconstruir índice).
+Execute as consultas nos dois estados para comparar leituras lógicas e tempo.
+DECLARE @AlunoId INT = (SELECT TOP (1) Id FROM dbo.Usuarios ORDER BY Id);
+ALTER INDEX IX_Matriculas_AlunoId ON dbo.Matriculas DISABLE;
+SET STATISTICS IO, TIME ON;
+SELECT AlunoId, CursoId, Status, ProgressoPercentual FROM dbo.Matriculas WHERE AlunoId = @AlunoId;
+ALTER INDEX IX_Matriculas_AlunoId ON dbo.Matriculas REBUILD;
+SELECT AlunoId, CursoId, Status, ProgressoPercentual FROM dbo.Matriculas WHERE AlunoId = @AlunoId;
+SET STATISTICS IO, TIME OFF;
+*/
 GO

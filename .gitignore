@@ -3,3 +3,6 @@ bin/
 obj/
 *.user
 *.suo
+.env
+appsettings.*.local.json
+k8s/secret.yaml

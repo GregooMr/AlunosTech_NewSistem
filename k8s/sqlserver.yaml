@@ -1,0 +1,72 @@
+# StatefulSet demonstrativo; prefira um banco SQL gerenciado em produção.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqlserver
+  namespace: alunostech
+spec:
+  clusterIP: None
+  selector:
+    app: sqlserver
+  ports:
+    - name: sql
+      port: 1433
+      targetPort: 1433
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sqlserver
+  namespace: alunostech
+spec:
+  serviceName: sqlserver
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sqlserver
+  template:
+    metadata:
+      labels:
+        app: sqlserver
+    spec:
+      containers:
+        - name: sqlserver
+          image: mcr.microsoft.com/mssql/server:2022-latest
+          ports:
+            - name: sql
+              containerPort: 1433
+              protocol: TCP
+          env:
+            - name: ACCEPT_EULA
+              value: "Y"
+            - name: MSSQL_PID
+              value: Developer
+            - name: MSSQL_SA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: alunostech-secrets
+                  key: MSSQL_SA_PASSWORD
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: alunostech-secrets
+                  key: APP_DB_PASSWORD
+          volumeMounts:
+            - name: dados-sqlserver
+              mountPath: /var/opt/mssql
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: dados-sqlserver
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi

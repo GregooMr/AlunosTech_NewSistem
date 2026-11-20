@@ -1,32 +1,26 @@
+using System.Security.Claims;
 using AlunosTech.NewSistem.Data;
 using AlunosTech.NewSistem.Models;
 using AlunosTech.NewSistem.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace AlunosTech.NewSistem.Controllers;
 
-public class ProfessorController(AppDbContext context, IForumService forum, IWebHostEnvironment environment) : Controller
+[Authorize(Roles = "Professor")]
+public class ProfessorController(AppDbContext context, IForumService forum, IWebHostEnvironment environment, ICursoService cursosService) : Controller
 {
     public static readonly string[] TiposMaterial = ["Plano", "Livro", "Slide", "Videoaula", "Material"];
 
-    private bool IsProfessor => HttpContext.Session.GetString("Perfil") == "Professor";
-    private int? ProfessorId => HttpContext.Session.GetInt32("AlunoId");
+    private int ProfessorId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     private const long TamanhoMaximoPdf = 10 * 1024 * 1024;
-
-    // Forbid() exige um esquema de autenticação configurado e causaria erro 500 neste projeto
-    // (a autenticação é feita por sessão); por isso volta-se para o login.
-    private IActionResult AcessoNegado() => RedirectToAction("Login", "Home");
 
     public async Task<IActionResult> Index()
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
+        var professorId = ProfessorId;
 
-        var cursos = await context.Cursos.AsNoTracking()
-            .Include(c => c.Conteudos)
-            .Where(c => c.ProfessorId == professorId)
-            .OrderBy(c => c.Titulo)
-            .ToListAsync();
+        var cursos = await cursosService.ListarDoProfessorAsync(professorId);
 
         ViewBag.Duvidas = await forum.ListAsync(professorId: professorId);
         ViewBag.Tipos = TiposMaterial;
@@ -36,8 +30,8 @@ public class ProfessorController(AppDbContext context, IForumService forum, IWeb
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> AdicionarConteudo(int cursoId, string? titulo, string? tipoMaterial, int pesoPercentual)
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
-        if (!await context.Cursos.AnyAsync(c => c.Id == cursoId && c.ProfessorId == professorId)) return AcessoNegado();
+        var professorId = ProfessorId;
+        if (!await cursosService.PertenceAoProfessorAsync(cursoId, professorId)) return Forbid();
 
         if (!Validar(titulo, tipoMaterial, pesoPercentual, out var erro))
         {
@@ -60,7 +54,7 @@ public class ProfessorController(AppDbContext context, IForumService forum, IWeb
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> AnexarPdf(int id, IFormFile? arquivo)
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
+        var professorId = ProfessorId;
 
         var conteudo = await context.ConteudosDisciplina
             .FirstOrDefaultAsync(c => c.Id == id && c.Curso.ProfessorId == professorId);
@@ -93,7 +87,7 @@ public class ProfessorController(AppDbContext context, IForumService forum, IWeb
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> EditarConteudo(int id, string? titulo, string? tipoMaterial, int pesoPercentual, string? comentarioProfessor)
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
+        var professorId = ProfessorId;
 
         var conteudo = await context.ConteudosDisciplina
             .FirstOrDefaultAsync(c => c.Id == id && c.Curso.ProfessorId == professorId);
@@ -122,7 +116,7 @@ public class ProfessorController(AppDbContext context, IForumService forum, IWeb
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> ExcluirConteudo(int id)
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
+        var professorId = ProfessorId;
 
         var conteudo = await context.ConteudosDisciplina
             .FirstOrDefaultAsync(c => c.Id == id && c.Curso.ProfessorId == professorId);
@@ -138,7 +132,7 @@ public class ProfessorController(AppDbContext context, IForumService forum, IWeb
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> Responder(int id, string? resposta)
     {
-        if (!IsProfessor || ProfessorId is not { } professorId) return AcessoNegado();
+        var professorId = ProfessorId;
 
         if (string.IsNullOrWhiteSpace(resposta))
             TempData["Aviso"] = "Digite uma resposta antes de enviar.";

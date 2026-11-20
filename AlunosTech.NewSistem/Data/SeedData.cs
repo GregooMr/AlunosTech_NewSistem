@@ -10,11 +10,6 @@ public static class SeedData
 
     public static void Initialize(AppDbContext db, IAuthenticationService auth)
     {
-        // Se o banco já foi criado pelo script_banco_moderno.sql, nada é recriado.
-        // Se não existir, o EF cria um esquema equivalente (sem function/procedure/trigger).
-        db.Database.EnsureCreated();
-        GarantirColunasDeMaterial(db);
-
         CorrigirHashesDeDemonstracao(db, auth);
 
         GarantirProfessoresEDisciplinas(db, auth);
@@ -23,21 +18,11 @@ public static class SeedData
         GarantirConteudos(db);
     }
 
-    private static void GarantirColunasDeMaterial(AppDbContext db)
-    {
-        db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.ConteudosDisciplina', 'Descricao') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD Descricao NVARCHAR(MAX) NULL");
-        db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.ConteudosDisciplina', 'ComentarioProfessor') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD ComentarioProfessor NVARCHAR(2000) NULL");
-        db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.ConteudosDisciplina', 'NomeArquivo') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD NomeArquivo VARCHAR(255) NULL");
-        db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.ConteudosDisciplina', 'UrlArquivo') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD UrlArquivo VARCHAR(500) NULL");
-        db.Database.ExecuteSqlRaw("IF COL_LENGTH('dbo.ConteudosDisciplina', 'DataUpload') IS NULL ALTER TABLE dbo.ConteudosDisciplina ADD DataUpload DATETIME2 NULL");
-    }
-
     // O script SQL grava valores HASH_SEGURO_* que não são hashes do PasswordHasher.
-    // Troca somente os dois usuários de demonstração; hashes reais nunca são alterados.
+    // Troca somente os hashes marcadores; hashes reais nunca são alterados.
     private static void CorrigirHashesDeDemonstracao(AppDbContext db, IAuthenticationService auth)
     {
         var usuarios = db.Alunos
-            .Where(a => a.Email == "lorandi@alunostech.com" || a.Email == "carlos@alunostech.com")
             .Where(a => a.SenhaHash.StartsWith("HASH_SEGURO_"))
             .ToList();
 
@@ -90,7 +75,7 @@ public static class SeedData
             if (!cursos.TryGetValue(matricula.Codigo, out var curso))
                 continue;
 
-            var existe = db.Matriculas.Any(m => m.AlunoId == aluno.Id && m.CursoId == curso.Id);
+            var existe = db.Matriculas.Any(m => m.AlunoId == aluno.Id && m.CursoId == curso.Id && m.Status != "Cancelada");
             if (!existe)
             {
                 db.Matriculas.Add(new Matricula

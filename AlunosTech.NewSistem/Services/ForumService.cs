@@ -32,7 +32,7 @@ public sealed class ForumService(AppDbContext context) : IForumService
     public async Task<bool> AddQuestionAsync(int alunoId, int cursoId, string pergunta)
     {
         // Só quem está matriculado na disciplina pode perguntar nela.
-        var matriculado = await context.Matriculas.AnyAsync(m => m.AlunoId == alunoId && m.CursoId == cursoId);
+        var matriculado = await context.Matriculas.AnyAsync(m => m.AlunoId == alunoId && m.CursoId == cursoId && m.Status != "Cancelada");
         if (!matriculado) return false;
 
         context.DuvidasForum.Add(new DuvidaForum { AlunoId = alunoId, CursoId = cursoId, Pergunta = pergunta.Trim() });

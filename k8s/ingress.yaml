@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alunostech-web
+  namespace: alunostech
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - alunostech.example.com
+      secretName: alunostech-tls
+  rules:
+    - host: alunostech.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: alunostech-web
+                port:
+                  number: 80

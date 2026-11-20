@@ -1,60 +1,60 @@
 using System.Diagnostics;
-using System.Net.Mail;
-using AlunosTech.NewSistem.Data;
+using System.Security.Claims;
 using AlunosTech.NewSistem.Models;
 using AlunosTech.NewSistem.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
+using ILoginService = AlunosTech.NewSistem.Services.IAuthenticationService;
 
 namespace AlunosTech.NewSistem.Controllers;
 
+[Authorize]
 public class HomeController : Controller
 {
-    private const string Ativa = "Ativa";
-    private const string Trancada = "Trancada";
-    private const string Concluida = "Concluida";
-    private const string Cancelada = "Cancelada";
+    private readonly ILoginService _authentication;
+    private readonly ICursoService _cursos;
+    private readonly IMatriculaService _matriculas;
 
-    private readonly AppDbContext _context;
-    private readonly IAuthenticationService _authentication;
-    private readonly ICertificateService _certificates;
-    private readonly IExamService _exams;
-
-    public HomeController(AppDbContext context, IAuthenticationService authentication,
-        ICertificateService certificates, IExamService exams)
+    public HomeController(ILoginService authentication, ICursoService cursos, IMatriculaService matriculas)
     {
-        _context = context;
         _authentication = authentication;
-        _certificates = certificates;
-        _exams = exams;
+        _cursos = cursos;
+        _matriculas = matriculas;
     }
 
-    private int? AlunoId => HttpContext.Session.GetInt32("AlunoId");
-    private bool EhProfessor => HttpContext.Session.GetString("Perfil") == "Professor";
+    private int? AlunoId => int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null;
+    private bool EhProfessor => User.IsInRole("Professor");
 
-    private void IniciarSessao(Aluno usuario)
+    private async Task IniciarSessaoAsync(Aluno usuario)
     {
-        HttpContext.Session.Clear();
-        HttpContext.Session.SetInt32("AlunoId", usuario.Id);
-        HttpContext.Session.SetString("AlunoNome", usuario.Nome);
-        // RA é nulo para professores: SetString lança exceção com null, por isso o "?? string.Empty".
-        HttpContext.Session.SetString("AlunoRA", usuario.RA ?? string.Empty);
-        HttpContext.Session.SetString("Perfil", usuario.Perfil);
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, usuario.Id.ToString()),
+            new(ClaimTypes.Name, usuario.Nome),
+            new(ClaimTypes.Role, usuario.Perfil)
+        };
+        if (!string.IsNullOrWhiteSpace(usuario.RA)) claims.Add(new Claim("RA", usuario.RA));
+
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
     }
 
     // ---------------------------------------------------------------- acesso
 
-    [HttpGet]
+    [AllowAnonymous, HttpGet]
     public async Task<IActionResult> Login()
     {
         if (AlunoId is not null)
             return EhProfessor ? RedirectToAction("Index", "Professor") : RedirectToAction(nameof(Index));
 
-        ViewBag.Cursos = await _context.Cursos.AsNoTracking().Include(c => c.Professor).OrderBy(c => c.Titulo).ToListAsync();
+        ViewBag.Cursos = await _cursos.ListarTodosAsync();
         return View();
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [AllowAnonymous, HttpPost, ValidateAntiForgeryToken, EnableRateLimiting("login")]
     public async Task<IActionResult> Entrar(string? email, string? senha)
     {
         email = email?.Trim();
@@ -64,327 +64,162 @@ public class HomeController : Controller
             return RedirectToAction(nameof(Login));
         }
 
-        var usuario = await _context.Alunos.FirstOrDefaultAsync(a => a.Email == email);
-        if (usuario is null || !_authentication.VerifyPassword(usuario, senha))
+        var usuario = await _authentication.AutenticarAsync(email, senha);
+        if (usuario is null)
         {
-            TempData["Erro"] = "E-mail ou senha inválidos! (Teste com: carlos@alunostech.com / 123)";
+            TempData["Erro"] = "E-mail ou senha inválidos.";
             return RedirectToAction(nameof(Login));
         }
 
-        IniciarSessao(usuario);
+        await IniciarSessaoAsync(usuario);
         return usuario.Perfil == "Professor" ? RedirectToAction("Index", "Professor") : RedirectToAction(nameof(Index));
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [AllowAnonymous, HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> CadastrarEMatricular(string? nome, string? email, string? senha, int cursoId)
     {
-        nome = nome?.Trim();
-        email = email?.Trim();
-
-        if (string.IsNullOrWhiteSpace(nome) || nome.Length < 3 || nome.Length > 255)
-            return Falha("Informe seu nome completo.");
-        if (string.IsNullOrWhiteSpace(email) || email.Length > 255 || !MailAddress.TryCreate(email, out _))
-            return Falha("Informe um e-mail válido.");
-        if (string.IsNullOrEmpty(senha) || senha.Length < 6)
-            return Falha("A senha deve ter pelo menos 6 caracteres.");
-        if (!await _context.Cursos.AnyAsync(c => c.Id == cursoId))
-            return Falha("Selecione uma disciplina válida.");
-        if (await _context.Alunos.AnyAsync(a => a.Email == email))
-            return Falha("Este e-mail já está cadastrado no sistema!");
-
-        string ra;
-        do { ra = "2026" + Random.Shared.Next(100, 1000); }
-        while (await _context.Alunos.AnyAsync(a => a.RA == ra));
-
-        var novoAluno = new Aluno { Nome = nome, Email = email, RA = ra, Perfil = "Aluno" };
-        novoAluno.SenhaHash = _authentication.HashPassword(novoAluno, senha);
-
-        // Aluno e matrícula são gravados no mesmo SaveChanges (transação única).
-        _context.Alunos.Add(novoAluno);
-        _context.Matriculas.Add(new Matricula { Aluno = novoAluno, CursoId = cursoId });
-
-        try
+        var resultado = await _authentication.CadastrarAlunoAsync(nome, email, senha, cursoId);
+        if (resultado.Usuario is null)
         {
-            await _context.SaveChangesAsync();
-        }
-        catch (DbUpdateException)
-        {
-            return Falha("Não foi possível concluir o cadastro. Tente novamente.");
-        }
-
-        IniciarSessao(novoAluno);
-        return RedirectToAction(nameof(Index));
-
-        IActionResult Falha(string mensagem)
-        {
-            TempData["Erro"] = mensagem;
+            TempData["Erro"] = resultado.Erro;
             return RedirectToAction(nameof(Login));
         }
+
+        await IniciarSessaoAsync(resultado.Usuario);
+        return RedirectToAction(nameof(Index));
     }
 
-    public IActionResult Sair()
+    [HttpPost, ValidateAntiForgeryToken]
+    public async Task<IActionResult> Sair()
     {
-        HttpContext.Session.Clear();
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return RedirectToAction(nameof(Login));
     }
 
+    [AllowAnonymous, HttpGet]
+    public IActionResult AcessoNegado() => StatusCode(StatusCodes.Status403Forbidden);
+
     // ---------------------------------------------------------------- aluno: cursos
 
+    [Authorize(Roles = "Aluno")]
     public async Task<IActionResult> Index()
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
         if (EhProfessor) return RedirectToAction("Index", "Professor");
 
-        var matriculas = await _context.Matriculas
-            .AsNoTracking()
-            .Include(m => m.Curso).ThenInclude(c => c.Professor)
-            .Where(m => m.AlunoId == AlunoId)
-            .OrderBy(m => m.Curso.Titulo)
-            .ToListAsync();
-
-        var jaMatriculados = matriculas.Select(m => m.CursoId).ToHashSet();
-        ViewBag.CursosDisponiveis = (await _context.Cursos.AsNoTracking().OrderBy(c => c.Titulo).ToListAsync())
-            .Where(c => !jaMatriculados.Contains(c.Id))
-            .ToList();
+        var matriculas = await _matriculas.ListarDoAlunoAsync(AlunoId.Value);
+        ViewBag.CursosDisponiveis = await _cursos.ListarDisponiveisAsync(AlunoId.Value);
 
         return View(matriculas);
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [Authorize(Roles = "Aluno"), HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> AdicionarCurso(int cursoId)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
         if (EhProfessor) return RedirectToAction("Index", "Professor");
 
-        if (!await _context.Cursos.AnyAsync(c => c.Id == cursoId))
-        {
-            TempData["Aviso"] = "Disciplina inválida.";
-            return RedirectToAction(nameof(Index));
-        }
-
-        var existente = await _context.Matriculas.FirstOrDefaultAsync(m => m.AlunoId == AlunoId && m.CursoId == cursoId);
-        if (existente is null)
-        {
-            _context.Matriculas.Add(new Matricula { AlunoId = AlunoId.Value, CursoId = cursoId });
-            await _context.SaveChangesAsync();
-            TempData["Sucesso"] = "Matrícula realizada com sucesso!";
-        }
-        else if (existente.Status == Trancada)
-        {
-            existente.Status = Ativa;
-            await _context.SaveChangesAsync();
-            TempData["Sucesso"] = "Matrícula reativada com sucesso!";
-        }
-        else if (existente.Status == Concluida)
-        {
-            TempData["Aviso"] = "Você já concluiu esta disciplina.";
-        }
-        else
-        {
-            TempData["Aviso"] = "Você já está matriculado nesta disciplina!";
-        }
+        var resultado = await _matriculas.AdicionarAsync(AlunoId.Value, cursoId);
+        TempData[resultado.Sucesso ? "Sucesso" : "Aviso"] = resultado.Mensagem;
 
         return RedirectToAction(nameof(Index));
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [Authorize(Roles = "Aluno"), HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> AlterarStatus(int matriculaId, string? status)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas.FirstOrDefaultAsync(m => m.Id == matriculaId && m.AlunoId == AlunoId);
-        if (matricula is null) return RedirectToAction(nameof(Index));
-
-        switch (status)
-        {
-            case Trancada when matricula.Status == Ativa:
-                matricula.Status = Trancada;
-                await _context.SaveChangesAsync();
-                TempData["Sucesso"] = "Matrícula trancada com sucesso.";
-                break;
-
-            case Ativa when matricula.Status == Trancada:
-                matricula.Status = Ativa;
-                await _context.SaveChangesAsync();
-                TempData["Sucesso"] = "Matrícula reativada com sucesso.";
-                break;
-
-            case Cancelada when matricula.Status is Ativa or Trancada:
-                _context.LogsAuditoria.Add(new LogAuditoria
-                {
-                    TabelaAfetada = "Matriculas",
-                    Acao = "DESMATRICULA",
-                    Detalhes = $"Matrícula ID: {matricula.Id} (Aluno {matricula.AlunoId}, Curso {matricula.CursoId}) cancelada pelo aluno."
-                });
-                _context.Matriculas.Remove(matricula);
-                await _context.SaveChangesAsync();
-                TempData["Sucesso"] = "Desmatrícula realizada com auditoria.";
-                break;
-
-            default:
-                TempData["Aviso"] = "Essa ação não está disponível para a situação atual da matrícula.";
-                break;
-        }
+        var resultado = await _matriculas.AlterarStatusAsync(AlunoId.Value, matriculaId, status);
+        TempData[resultado.Sucesso ? "Sucesso" : "Aviso"] = resultado.Mensagem;
 
         return RedirectToAction(nameof(Index));
     }
 
     // ---------------------------------------------------------------- sala de aula
 
+    [Authorize(Roles = "Aluno")]
     public async Task<IActionResult> SalaDeAula(int id)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas
-            .AsNoTracking()
-            .Include(m => m.Curso)
-            .FirstOrDefaultAsync(m => m.Id == id && m.AlunoId == AlunoId);
-        if (matricula is null) return RedirectToAction(nameof(Index));
-
-        if (matricula.Status == Trancada)
+        var resultado = await _matriculas.ObterSalaAsync(AlunoId.Value, id);
+        if (resultado.ViewModel is null)
         {
-            TempData["Aviso"] = "Esta matrícula está trancada. Reative-a para acessar a sala de aula.";
+            if (resultado.Aviso is not null) TempData["Aviso"] = resultado.Aviso;
             return RedirectToAction(nameof(Index));
         }
-
-        var conteudos = await _context.ConteudosDisciplina.AsNoTracking()
-            .Where(c => c.CursoId == matricula.CursoId).ToListAsync();
-
-        return View(new SalaDeAulaViewModel(matricula, ProgressoCalculator.Montar(conteudos, matricula.ProgressoPercentual)));
+        return View(resultado.ViewModel);
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [Authorize(Roles = "Aluno"), HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> ConcluirAtividade(int matriculaId, int conteudoId)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas.FirstOrDefaultAsync(m => m.Id == matriculaId && m.AlunoId == AlunoId);
-        if (matricula is null) return RedirectToAction(nameof(Index));
-
-        if (matricula.Status != Ativa)
-        {
-            TempData["Aviso"] = "Só é possível avançar em matrículas ativas.";
-            return RedirectToAction(nameof(Index));
-        }
-
-        var conteudos = await _context.ConteudosDisciplina.AsNoTracking()
-            .Where(c => c.CursoId == matricula.CursoId).ToListAsync();
-        var alvo = ProgressoCalculator.Montar(conteudos, matricula.ProgressoPercentual)
-            .FirstOrDefault(a => a.Conteudo.Id == conteudoId);
-
-        if (alvo is null)
-            TempData["Aviso"] = "Conteúdo não encontrado.";
-        else if (alvo.Concluida)
-            TempData["Aviso"] = "Este conteúdo já foi concluído.";
-        else if (!alvo.Proxima)
-            TempData["Aviso"] = "Conclua os conteúdos anteriores primeiro.";
-        else
-        {
-            matricula.ProgressoPercentual = Math.Clamp(alvo.Fim, 0, 100);
-            await _context.SaveChangesAsync();
-        }
+        var resultado = await _matriculas.ConcluirAtividadeAsync(AlunoId.Value, matriculaId, conteudoId);
+        if (!resultado.Sucesso) TempData["Aviso"] = resultado.Mensagem;
 
         return RedirectToAction(nameof(SalaDeAula), new { id = matriculaId });
     }
 
     // ---------------------------------------------------------------- prova e certificado
 
-    [HttpGet]
+    [Authorize(Roles = "Aluno"), HttpGet]
     public async Task<IActionResult> Prova(int id)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas.AsNoTracking().Include(m => m.Curso)
-            .FirstOrDefaultAsync(m => m.Id == id && m.AlunoId == AlunoId);
-        if (matricula is null) return RedirectToAction(nameof(Index));
-
-        if (matricula.Status == Concluida && matricula.CodigoCertificado is not null)
+        var resultado = await _matriculas.ObterProvaAsync(AlunoId.Value, id);
+        if (resultado.CertificadoEmitido)
             return RedirectToAction(nameof(Certificado), new { id });
-
-        if (matricula.Status != Ativa || matricula.ProgressoPercentual < 100)
+        if (resultado.ViewModel is null)
         {
-            TempData["Aviso"] = "A prova só é liberada com a matrícula ativa e 100% de progresso.";
+            if (resultado.Aviso is not null) TempData["Aviso"] = resultado.Aviso;
             return RedirectToAction(nameof(Index));
         }
-
-        return View(new ProvaViewModel(matricula, _exams.GetQuestions(matricula.Curso), _certificates.NotaMinima));
+        return View(resultado.ViewModel);
     }
 
-    [HttpPost, ValidateAntiForgeryToken]
+    [Authorize(Roles = "Aluno"), HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> ConcluirProva(int matriculaId, Dictionary<int, int>? respostas)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas.Include(m => m.Curso)
-            .FirstOrDefaultAsync(m => m.Id == matriculaId && m.AlunoId == AlunoId);
-        if (matricula is null) return RedirectToAction(nameof(Index));
-
-        if (matricula.Status != Ativa || matricula.ProgressoPercentual < 100)
-        {
-            TempData["Aviso"] = "A prova não está disponível para esta matrícula.";
-            return RedirectToAction(nameof(Index));
-        }
-
-        // A nota é calculada no servidor a partir das respostas; o aluno não informa a nota.
-        var nota = _exams.Grade(matricula.Curso, respostas ?? new Dictionary<int, int>());
-        var certificado = _certificates.Create(nota);
-        matricula.NotaFinal = nota;
-
-        if (!certificado.Aprovado)
-        {
-            await _context.SaveChangesAsync();
-            TempData["Aviso"] = $"Sua nota foi {nota:0.00}. É necessário atingir {_certificates.NotaMinima:0.0} para emitir o certificado. Revise os conteúdos e tente novamente.";
-            return RedirectToAction(nameof(SalaDeAula), new { id = matriculaId });
-        }
-
-        matricula.Status = Concluida;
-        matricula.CodigoCertificado = certificado.Codigo;
-        _context.LogsAuditoria.Add(new LogAuditoria
-        {
-            TabelaAfetada = "Matriculas",
-            Acao = "EMISSAO_CERTIFICADO",
-            Detalhes = $"Matrícula ID: {matricula.Id}; Código: {certificado.Codigo}; Nota: {nota:0.00}"
-        });
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Certificado), new { id = matriculaId });
+        var resultado = await _matriculas.ConcluirProvaAsync(AlunoId.Value, matriculaId, respostas ?? new Dictionary<int, int>());
+        if (resultado.Aprovado) return RedirectToAction(nameof(Certificado), new { id = matriculaId });
+        if (resultado.Aviso is not null) TempData["Aviso"] = resultado.Aviso;
+        return RedirectToAction(resultado.Disponivel ? nameof(SalaDeAula) : nameof(Index),
+            resultado.Disponivel ? new { id = matriculaId } : null);
     }
 
-    [HttpGet]
+    [Authorize(Roles = "Aluno"), HttpGet]
     public async Task<IActionResult> Certificado(int id)
     {
         if (AlunoId is null) return RedirectToAction(nameof(Login));
 
-        var matricula = await _context.Matriculas.AsNoTracking()
-            .Include(m => m.Curso).Include(m => m.Aluno)
-            .FirstOrDefaultAsync(m => m.Id == id && m.AlunoId == AlunoId);
-
-        if (matricula is null || matricula.Status != Concluida || matricula.CodigoCertificado is null || matricula.NotaFinal is null)
+        var certificado = await _matriculas.ObterCertificadoAsync(AlunoId.Value, id);
+        if (certificado is null)
         {
             TempData["Aviso"] = "Certificado indisponível para esta matrícula.";
             return RedirectToAction(nameof(Index));
         }
-
-        var codigo = matricula.CodigoCertificado.Value;
-        var padrao = $"%{codigo}%";
-        var log = await _context.LogsAuditoria.AsNoTracking()
-            .Where(l => l.Acao == "EMISSAO_CERTIFICADO" && EF.Functions.Like(l.Detalhes!, padrao))
-            .OrderBy(l => l.DataLog)
-            .FirstOrDefaultAsync();
-
-        var certificado = _certificates.Restore(matricula.NotaFinal.Value, codigo, log?.DataLog ?? matricula.DataMatricula);
-        return View(new CertificateViewModel(matricula, certificado));
+        return View(certificado);
     }
 
     // ---------------------------------------------------------------- áreas de apoio
 
-    public IActionResult Bibliotecas() => AlunoId is null ? RedirectToAction(nameof(Login)) : View();
+    [Authorize(Roles = "Aluno")]
+    public IActionResult Bibliotecas() => View();
 
-    public IActionResult MuralDoAluno() => AlunoId is null ? RedirectToAction(nameof(Login)) : View();
+    [Authorize(Roles = "Aluno")]
+    public IActionResult MuralDoAluno() => View();
 
-    public IActionResult Tutoriais() => AlunoId is null ? RedirectToAction(nameof(Login)) : View();
+    [Authorize(Roles = "Aluno")]
+    public IActionResult Tutoriais() => View();
 
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
+    [AllowAnonymous]
     public IActionResult Error() =>
         View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
 }

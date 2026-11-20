@@ -1,12 +1,12 @@
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: alunostech-sqlserver
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-AlunosTech#2026Senha}"
-    ports:
-      - "1433:1433"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Defina MSSQL_SA_PASSWORD no arquivo .env}"
+    # Para administração local, descomente a porta e use localhost,1433.
+    # ports:
+    #   - "1433:1433"
     volumes:
       - sqlserver_data:/var/opt/mssql
     healthcheck:
@@ -16,20 +16,33 @@ services:
       retries: 20
       start_period: 30s
 
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    entrypoint: ["/bin/bash", "/database/init-db.sh"]
+    environment:
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Defina MSSQL_SA_PASSWORD no arquivo .env}"
+      APP_DB_PASSWORD: "${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD no arquivo .env}"
+    volumes:
+      - ./database/AlunosTech_Moderno.sql:/database/AlunosTech_Moderno.sql:ro
+      - ./database/init-db.sh:/database/init-db.sh:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: alunostech-app
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=AlunosTech_Moderno;User Id=sa;Password=${MSSQL_SA_PASSWORD:-AlunosTech#2026Senha};TrustServerCertificate=True;"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=AlunosTech_Moderno;User Id=app_user;Password=${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD no arquivo .env};TrustServerCertificate=True;"
     ports:
       - "8080:8080"
     depends_on:
-      sqlserver:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
 
 volumes:
   sqlserver_data:
